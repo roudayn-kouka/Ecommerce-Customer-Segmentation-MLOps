@@ -93,3 +93,12 @@ logs
 .env
 
 ecommerce-mlops-406821-40598235283c.json
+# Local environments & tool caches
+.venv/
+.ruff_cache/
+pytest-report.xml
+
+# Generated artefacts (versioned with DVC, not Git)
+/data/
+/models/
+mlruns/

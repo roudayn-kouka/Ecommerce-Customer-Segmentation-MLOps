@@ -1,0 +1,29 @@
+[project]
+name = "customer-segmentation-mlops"
+version = "2.0.0"
+description = "End-to-end MLOps pipeline for e-commerce customer segmentation"
+authors = [{ name = "Roudayna Kouka" }]
+requires-python = ">=3.10"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+addopts = "-q --ignore=dags --ignore=gcpdeploy --ignore=logs"
+filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning"]
+
+[tool.coverage.run]
+source = ["src", "api"]
+omit = ["src/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["gcpdeploy", "dags/src", "mlruns", "logs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM"]
+ignore = ["N803", "N806"]  # X / DataFrame column names in ML code
