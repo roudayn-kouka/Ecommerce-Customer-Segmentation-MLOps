@@ -6,6 +6,8 @@
 
 **Autrice : Roudayna Kouka**
 
+![Architecture MLOps](docs/architecture_mlops.gif)
+
 Pipeline MLOps de bout en bout qui segmente les clients d'un site e-commerce à partir de leurs
 transactions. Elle couvre l'ingestion et le nettoyage des données, le feature engineering,
 l'entraînement et la sélection du modèle, une API de prédiction, le suivi de la dérive des
