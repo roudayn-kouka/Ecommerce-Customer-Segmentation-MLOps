@@ -1,33 +1,40 @@
 """
-Function to unzip data and make it available
+Extract the downloaded zip archive and return the path of the Excel file.
 """
-import zipfile
+
+from __future__ import annotations
+
 import os
+import zipfile
 
-# Set the root directory variable using a relative path
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+from src.utils import DATA_DIR, get_logger
 
-ZIP_FILENAME = os.path.join(ROOT_DIR, 'data','data.zip')
-EXTRACT_TO = os.path.join(ROOT_DIR,'data')
+logger = get_logger(__name__)
 
-def unzip_file(zip_filename=ZIP_FILENAME, extract_to=EXTRACT_TO):
+ZIP_FILENAME = str(DATA_DIR / "data.zip")
+EXTRACT_TO = str(DATA_DIR)
+EXCEL_NAME = "Online Retail.xlsx"
+
+
+def unzip_file(zip_filename: str = ZIP_FILENAME, extract_to: str = EXTRACT_TO) -> str:
     """
-    Function to unzip the downloaded data
-    Args:
-      zip_filename: zipfile path, a default is used if not specified
-      extract_to: Path where the unzipped and extracted data is available
-    Returns:
-      extract_to: filepath where the data is available
+    Unzip ``zip_filename`` into ``extract_to``.
+
+    :return: Path to the extracted ``Online Retail.xlsx`` file.
+    :raises FileNotFoundError: If the archive does not exist.
+    :raises zipfile.BadZipFile: If the archive is corrupted.
     """
+    if not os.path.exists(zip_filename):
+        raise FileNotFoundError(f"Zip file not found: {zip_filename}")
     try:
-        with zipfile.ZipFile(zip_filename, 'r') as zip_ref:
+        with zipfile.ZipFile(zip_filename, "r") as zip_ref:
             zip_ref.extractall(extract_to)
-        print(f"File {zip_filename} successfully unzipped to {extract_to}")
     except zipfile.BadZipFile:
-        print(f"Failed to unzip {zip_filename}")
-    # Return unzipped file
-    unzipped_file =  os.path.join(extract_to, 'Online Retail.xlsx')
-    return unzipped_file
+        logger.error("Failed to unzip %s", zip_filename)
+        raise
+    logger.info("File %s successfully unzipped to %s", zip_filename, extract_to)
+    return os.path.join(extract_to, EXCEL_NAME)
+
 
 if __name__ == "__main__":
-    UNZIPPED_FILE = unzip_file(ZIP_FILENAME, EXTRACT_TO)
+    unzip_file()

@@ -1,145 +1,80 @@
 """
-Inputs: {
-    path: file saving location, 
-    correlation threshold: threshold for determining high correlations}
-Outputs: { 
-    Image: png file with masked heatmap
-    Matrix: Correlation Matrix as parquet}
-Returns: None
+Correlation analysis of the scaled customer features.
+
+Outputs a lower-triangle heatmap (PNG), the correlation matrix (parquet) and
+the list of highly correlated feature pairs (text file).
 """
+
+from __future__ import annotations
+
 import os
-import json
-from prompt_toolkit.shortcuts import yes_no_dialog
-import pandas as pd
-import seaborn as sns
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 
-# Reset background style
-sns.set_style('whitegrid')
+import matplotlib
 
-#Loading Config File
-PAR_DIRECTORY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-config_path = os.path.join(PAR_DIRECTORY,"config","feature_processing.json")
-with open(config_path, "rb") as f:
-    config = json.load(f).get("correlation")
+matplotlib.use("Agg")  # headless backend: works in Airflow / CI containers
 
-#Global variables
-__INGESTPATH__ = os.path.join(PAR_DIRECTORY,config.get("ingest_path")) #default path in config
-__IMGPATH__ = os.path.join(PAR_DIRECTORY,config.get("image_path")) #default path in config
-__PARQUETPATH__ = os.path.join(PAR_DIRECTORY,config.get("correlation_matrix_path")) #default path
-corr_thresh = config.get("correlation_threshold") # in config
-__OUTPUTPATH__=(__IMGPATH__,__PARQUETPATH__)
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import seaborn as sns  # noqa: E402
+from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 
-def correlation_check(in_path=__INGESTPATH__,out_path=__OUTPUTPATH__,\
-    correlation_threshold=corr_thresh):
+from src.utils import get_logger, load_config, load_frame, resolve, save_parquet  # noqa: E402
+
+logger = get_logger(__name__)
+
+_CONFIG = load_config("correlation")
+DEFAULT_IN_PATH = resolve(_CONFIG["ingest_path"])
+IMG_PATH = resolve(_CONFIG["image_path"])
+PARQUET_PATH = resolve(_CONFIG["correlation_matrix_path"])
+LIST_PATH = resolve(_CONFIG["list_path"])
+CORR_THRESHOLD = _CONFIG["correlation_threshold"]
+
+
+def high_correlations(corr: pd.DataFrame, threshold: float) -> list[tuple[str, str, float]]:
+    """Feature pairs whose absolute correlation is >= ``threshold`` (sorted, desc)."""
+    upper = corr.where(np.triu(np.ones(corr.shape, dtype=bool), k=1))
+    pairs = upper.stack()
+    pairs = pairs[pairs.abs() >= threshold].sort_values(key=np.abs, ascending=False)
+    return [(a, b, round(float(v), 3)) for (a, b), v in pairs.items()]
+
+
+def correlation_check(
+    in_path: str = DEFAULT_IN_PATH,
+    out_path=(IMG_PATH, PARQUET_PATH),
+    correlation_threshold: float = CORR_THRESHOLD,
+    list_path: str = LIST_PATH,
+) -> list[tuple[str, str, float]]:
     """
-    Global variables(can only be changed through Config file)
-    Args:
-    in_path(str): ingest_path, 
-    out_path(str1,str2):
-    cvr_threshold[float]: cumulative explained variance threshold for variance
-    drop_cols: column to be ommitted for pca
+    Compute and persist the correlation matrix of the numeric features.
+
+    :return: Highly correlated feature pairs.
     """
-    #Placeholder for data
-    data = None
+    if not all(isinstance(p, str) for p in out_path):
+        raise TypeError("Save paths should be strings!")
+    if not 0 < correlation_threshold < 1:
+        raise ValueError("correlation_threshold should lie between 0 and 1.")
 
-    #Try to Load data from pickle
-    try:
-        data = pd.read_parquet(in_path)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"File not found at {in_path}.") from None
+    data = load_frame(in_path)
+    corr = data.select_dtypes("number").corr()
 
-    #Check datatype
-    if not isinstance(data,pd.DataFrame):
-        raise TypeError("File did not load DataFrame correctly.") from None
+    mask = np.triu(np.ones_like(corr, dtype=bool), k=1)
+    cmap = LinearSegmentedColormap.from_list(
+        "custom_map", ["#ff6200", "#ffcaa8", "white", "#ffcaa8", "#ff6200"], N=256
+    )
+    sns.set_style("whitegrid")
+    fig = plt.figure(figsize=(12, 10))
+    plt.title(f"Correlation Matrix (threshold {correlation_threshold})", fontsize=14)
+    sns.heatmap(corr, mask=mask, cmap=cmap, annot=True, center=0, fmt=".2f", linewidths=2)
+    os.makedirs(os.path.dirname(out_path[0]), exist_ok=True)
+    fig.savefig(out_path[0], bbox_inches="tight")
+    plt.close(fig)
 
-    print(data)
+    save_parquet(corr, out_path[1])
 
-    #check save paths are strings
-    try:
-        assert isinstance(out_path[0],str)
-    except AssertionError as ae:
-        raise TypeError("Image Save Path should be a String!") from ae
-
-    try:
-        assert isinstance(out_path[0],str)
-    except AssertionError as ae:
-        raise TypeError("Parquet Save Path should be a String!") from ae
-
-    #Value check for correlation_thresh
-    if not 0<correlation_threshold<1:
-        raise ValueError("cvr_thresh should lie between 0 and 1.")
-
-    # Calculate the correlation matrix, **Future deprecation warning**
-    corr = data.corr()
-
-    # Create a mask to only show the lower triangle of the matrix (since it's mirrored around its
-    # top-left to bottom-right diagonal)
-    mask = np.zeros_like(corr)
-    mask[np.triu_indices_from(mask, k=1)] = True
-
-    # Define a custom colormap
-    colors = ['#ff6200', '#ffcaa8', 'white', '#ffcaa8', '#ff6200']
-    my_cmap = LinearSegmentedColormap.from_list('custom_map', colors, N=256)
-
-    # Plot the heatmap
-    fig=plt.figure(figsize=(10, 10))
-    plt.title(f'Correlation Matrix, Correlation Threshold:{correlation_threshold}', fontsize=14)
-    sns.heatmap(corr, mask=mask, cmap=my_cmap, annot=True, center=0, fmt='.2f', linewidths=2)
-
-    #Save heatmap as image for reference
-    save_heatmap(fig,out_path[0])
-
-    #saving corr matrix
-    save_correlations_as_parquet(corr,out_path[1])
-
-def save_heatmap(fig,path):
-    """
-    Saves the heatmap as png file.
-    Inputs: data: data to be saved, path: file saving location
-    Returns: None
-    Executes: saving of png, except prompts the user to proceed if file open.
-    Error Checks: FileNotFoundError
-    """
-    try:
-        p=os.path.dirname(path)
-        if not os.path.exists(p):
-            os.makedirs(p)
-        fig.savefig(path)
-        print(f"File saved successfully at Path: {path}.")
-    except FileExistsError as fe:
-        result = yes_no_dialog(
-            title='File Exists Error',
-            text=f"Existing file in use. Please close to overwrite the file. Error: {fe}.").run()
-        if result:
-            fig.savefig(path)
-        else:
-            print(f"Could not save File at Path: {path}.")
-
-def save_correlations_as_parquet(data,path):
-    """
-    Saves the correlation matrix as parquet.
-    Inputs: data: data to be saved, path: file saving location
-    Returns: None
-    Executes: raises Attribute error if data is not df as /
-    to_parquet would not be executed.
-    Error Checks: FileNotFoundError
-    """
-    try:
-        p=os.path.dirname(path)
-        if not os.path.exists(p):
-            os.makedirs(p)
-        data.to_parquet(path)
-        print(f"File saved successfully at Path: {path}.")
-    except AttributeError as ae:
-        raise AttributeError("to_parquet could not be executed as object not DataFrame.") from ae
-    except FileExistsError as fe:
-        result = yes_no_dialog(
-            title='File Exists Error',
-            text=f"Existing file in use. Please close to overwrite the file. Error: {fe}.").run()
-        if result:
-            data.to_parquet(path)
-        else:
-            print(f"Could not save File at Path: {path}.")
+    pairs = high_correlations(corr, correlation_threshold)
+    os.makedirs(os.path.dirname(list_path), exist_ok=True)
+    with open(list_path, "w", encoding="utf-8") as file:
+        file.writelines(f"{a}\t{b}\t{v}\n" for a, b, v in pairs)
+    logger.info("%d feature pairs above |r| >= %s", len(pairs), correlation_threshold)
+    return pairs

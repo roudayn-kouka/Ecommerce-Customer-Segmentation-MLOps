@@ -1,40 +1,45 @@
 """
-Function to download and ingest the data file
+Download the raw Online Retail dataset (UCI) as a zip archive.
 """
+
+from __future__ import annotations
+
 import os
+
 import requests
+
+from src.utils import DATA_DIR, get_logger
+
+logger = get_logger(__name__)
 
 DEFAULT_FILE_URL = "https://archive.ics.uci.edu/static/public/352/online+retail.zip"
 
-def ingest_data(file_url=DEFAULT_FILE_URL):
+
+def ingest_data(
+    file_url: str = DEFAULT_FILE_URL, timeout: int = 60, output_dir: str | None = None
+) -> str:
     """
-    Function to download file from URL
-    Args:
-        file_url: URL of the file, A default is used if not specified
-    Returns:
-        zipfile_path: The zipped file path to the data
+    Download the file at ``file_url`` into ``<output_dir>/data.zip``.
+
+    :param file_url: URL of the zip archive (UCI Online Retail by default).
+    :param timeout: HTTP timeout in seconds.
+    :param output_dir: Target folder (defaults to the project ``data`` folder).
+    :return: Path to the downloaded zip file.
+    :raises requests.HTTPError: If the server does not answer with a 2xx status.
     """
-    # Send an HTTP GET request to the URL
-    response = requests.get(file_url, timeout=30)
+    output_dir = output_dir or str(DATA_DIR)
+    os.makedirs(output_dir, exist_ok=True)
+    zipfile_path = os.path.join(output_dir, "data.zip")
 
-    print("Downloading Data")
+    logger.info("Downloading data from %s", file_url)
+    response = requests.get(file_url, timeout=timeout)
+    response.raise_for_status()
 
-    # Set the root directory variable using a relative path
-    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-
-    # Path to store the zipfile
-    zipfile_path=os.path.join(root_dir, 'data','data.zip')
-    # Check if the request was successful (status code 200)
-    if response.status_code == 200:
-        # Save file to data
-        with open(zipfile_path, "wb") as file:
-            file.write(response.content)
-        print(f"File downloaded successfully. Zip file available under {zipfile_path}")
-    else:
-        print(f"Failed to download the file. Status code: {response.status_code}")
-
+    with open(zipfile_path, "wb") as file:
+        file.write(response.content)
+    logger.info("File downloaded successfully. Zip file available under %s", zipfile_path)
     return zipfile_path
 
+
 if __name__ == "__main__":
-    ZIPFILE_PATH = ingest_data("https://archive.ics.uci.edu/static/public/352/online+retail.zip")
-    
+    ingest_data()

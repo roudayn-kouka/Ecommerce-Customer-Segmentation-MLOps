@@ -1,123 +1,65 @@
 """
-Modular script to perform PCA on incoming data.
-Scripts checks PC ranging from 2 to 8 until cumulative \
-explained variance of threshold is achieved.
-Input: Path string to load pickle/parquet file.
-Output: Path string for parquet file.
+Dimensionality reduction with PCA.
+
+The number of components is the smallest one (between 2 and the number of
+features) whose cumulative explained variance reaches ``cvr_threshold``.
 """
-import os
-import json
-import pandas as pd
+
+from __future__ import annotations
+
 import numpy as np
+import pandas as pd
 from sklearn.decomposition import PCA
-from prompt_toolkit.shortcuts import yes_no_dialog
 
-#Loading Config File
-PAR_DIRECTORY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-config_path = os.path.join(PAR_DIRECTORY,"config","feature_processing.json")
-with open(config_path, "rb") as f:
-    config = json.load(f).get("pca")
+from src.utils import get_logger, load_config, load_frame, resolve, save_parquet
 
-#Global variables
-__INGESTPATH__ = os.path.join(PAR_DIRECTORY,config.get("ingest_path")) #default path in config
-__OUTPUTPATH__ = os.path.join(PAR_DIRECTORY,config.get("output_path")) #default path in config
-NOT_COLUMNS = config.get("columns_not_considered")#columns wrt to defaults in config
-CVR_THRESHOLD = config.get("cvr_threshold")
+logger = get_logger(__name__)
 
-def pc_analyzer(in_path=__INGESTPATH__,out_path=__OUTPUTPATH__,\
-    drop_cols=NOT_COLUMNS,cvr_thresh=CVR_THRESHOLD):
-    """
-    Global variables(can only be changed through Config file)
-    Args:
-    paths(str1,str2): str1:ingest_path, str2:output_path
-    CVR_THRESHOLDold[float]: cumulative explained variance threshold for variance
-    drop_cols: column to be ommitted for pca
-    """
-    #Placeholder for data
-    data = None
+_CONFIG = load_config("pca")
+DEFAULT_IN_PATH = resolve(_CONFIG["ingest_path"])
+DEFAULT_OUT_PATH = resolve(_CONFIG["output_path"])
+NOT_COLUMNS = _CONFIG["columns_not_considered"]
+CVR_THRESHOLD = _CONFIG["cvr_threshold"]
 
-    #File Loading
-    try:
-        data = pd.read_parquet(in_path)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"File not found at {in_path}.") from None
 
-    #Check datatype
-    if not isinstance(data,pd.DataFrame):
-        raise TypeError("File did not load DataFrame correctly.") from None
-
-    #Check all required columns exist in DF
-    try:
-        assert all(col in data.columns for col in drop_cols)
-    except AssertionError as exc:
-        raise KeyError("Column not found in Dataframe.") from exc
-
-    #Check columns <4, PCA not required
-    if len(data.columns)<4:
-        raise ValueError("Columns less than 4. Need not proceed with PCA.")
-
-    #Value check for CVR_THRESHOLD
-    if not 0<cvr_thresh<1:
-        raise ValueError("CVR_THRESHOLD should lie between 0 and 1.")
-
-    #Selecting columns in data for PCA
-    data.set_index('CustomerID', inplace=True)
-    data = data.drop(drop_cols, axis=1)
-
-    print(data)
-
-    n = pca_(data,cvr_thresh)
-    pca = PCA(n_components=n).fit(data)
-
-    # Getting post-PCA data
-    reduced_data = pca.transform(data)
-    columns=[f'PC{i+1}' for i in range(pca.n_components_)]
-    pca_transformed_data = pd.DataFrame(reduced_data, columns=columns)
-    pca_transformed_data.index = data.index
-    print(pca_transformed_data)
-
-    #saving data as parquet
-    try:
-        p=os.path.dirname(out_path)
-        if not os.path.exists(p):
-            os.makedirs(p)
-        pca_transformed_data.to_parquet(out_path)
-        print(f"File saved successfully at Path: {out_path}.")
-    except FileExistsError:
-        result = yes_no_dialog(
-            title='File Exists Error',
-            text="Existing file in use. Please close to overwrite the file. Error:.").run()
-        if result:
-            pca_transformed_data.to_parquet(out_path)
-            print(f"File saved successfully at Path: {out_path}.")
-        else:
-            print(f"Could not save File at Path: {out_path}.")
-
-    return out_path
-
-def pca_(data,thresh):
-    """
-    Refactoring for iterative check of n_components 
-    to cover threshold cumulative explained variance.
-    data: input data for pca
-    thresh[float]: cumulative explained variance threshold for variance
-    """
-    #PCA
-    n_components_range=np.arange(2,9)
-    n=[]
-    cumulative_var_ratio=[0]
-    for n_components in n_components_range:
-        if cumulative_var_ratio[-1] <= thresh:
-            pca_check=PCA(n_components=n_components).fit(data)
-            var_ratio = pca_check.explained_variance_ratio_
-            cumulative_var_ratio.append(np.cumsum(var_ratio)[n_components-1])
-            n.append(n_components)
-            print(n[-1],cumulative_var_ratio[-1])
-        elif n_components==n_components_range[-1]:
-            n=n_components
-            break
-        else:
-            n=n_components
-            break
-    print(n,cumulative_var_ratio)
+def choose_n_components(data: pd.DataFrame, thresh: float, min_components: int = 2) -> int:
+    """Smallest number of components reaching ``thresh`` cumulative explained variance."""
+    max_components = min(data.shape)
+    cumulative = np.cumsum(PCA(n_components=max_components).fit(data).explained_variance_ratio_)
+    n = int(np.searchsorted(cumulative, thresh) + 1)
+    n = max(min_components, min(n, max_components))
+    logger.info("PCA: %d components explain %.1f%% of variance", n, 100 * cumulative[n - 1])
     return n
+
+
+def pc_analyzer(
+    in_path: str = DEFAULT_IN_PATH,
+    out_path: str = DEFAULT_OUT_PATH,
+    drop_cols=NOT_COLUMNS,
+    cvr_thresh: float = CVR_THRESHOLD,
+) -> str:
+    """
+    Run PCA on the scaled customer features and save the principal components.
+
+    :raises KeyError: If a column in ``drop_cols`` does not exist.
+    :raises ValueError: If fewer than 4 features remain or the threshold is not in ]0, 1[.
+    """
+    data = load_frame(in_path)
+    missing = [c for c in drop_cols if c not in data.columns]
+    if missing:
+        raise KeyError(f"Column not found in Dataframe: {missing}")
+    if not 0 < cvr_thresh < 1:
+        raise ValueError("cvr_thresh should lie between 0 and 1.")
+
+    features = data.set_index("CustomerID").drop(columns=list(drop_cols))
+    if features.shape[1] < 4:
+        raise ValueError("Columns less than 4. Need not proceed with PCA.")
+    features = features.astype(float)
+
+    pca = PCA(n_components=choose_n_components(features, cvr_thresh)).fit(features)
+    reduced = pd.DataFrame(
+        pca.transform(features),
+        columns=[f"PC{i + 1}" for i in range(pca.n_components_)],
+        index=features.index,
+    )
+    return save_parquet(reduced, out_path)
